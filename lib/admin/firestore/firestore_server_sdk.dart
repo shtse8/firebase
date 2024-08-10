@@ -94,20 +94,12 @@ class FirestoreServerSDK implements FirestoreSDK {
       throw ArgumentError('The provided path must point to a document: $path');
     }
 
-    final document = _mapToFirestoreDocument(pathInfo.id, data);
+    final writes = _createWritesForDocument(pathInfo.documentPath, data, merge);
 
-    if (merge) {
-      final mask = firestore.DocumentMask()..fieldPaths = data.keys.toList();
-      await _api.projects.databases.documents.patch(
-          document, pathInfo.documentPath,
-          updateMask_fieldPaths: mask.fieldPaths);
-    } else {
-      await _api.projects.databases.documents.createDocument(
-          document,
-          pathInfo.parentPath,
-          pathInfo.segments[pathInfo.segments.length - 2], // collection ID
-          documentId: pathInfo.id);
-    }
+    await _api.projects.databases.documents.commit(
+      firestore.CommitRequest()..writes = writes,
+      _databasePath,
+    );
   }
 
   @override
@@ -118,12 +110,74 @@ class FirestoreServerSDK implements FirestoreSDK {
       throw ArgumentError('The provided path must point to a document: $path');
     }
 
-    final document = _mapToFirestoreDocument(pathInfo.id, data);
-    final mask = firestore.DocumentMask()..fieldPaths = data.keys.toList();
+    final writes = _createWritesForDocument(pathInfo.documentPath, data, true);
 
-    await _api.projects.databases.documents.patch(
-        document, pathInfo.documentPath,
-        updateMask_fieldPaths: mask.fieldPaths);
+    await _api.projects.databases.documents.commit(
+      firestore.CommitRequest()..writes = writes,
+      _databasePath,
+    );
+  }
+
+  List<firestore.Write> _createWritesForDocument(
+      String docPath, Map<String, dynamic> data, bool merge) {
+    final writes = <firestore.Write>[];
+    final updateMask = firestore.DocumentMask();
+    final updateTransforms = <firestore.FieldTransform>[];
+    final filteredData = Map<String, dynamic>.from(data);
+
+    data.forEach((key, value) {
+      if (value is FieldValue) {
+        filteredData.remove(key);
+        switch (value) {
+          case DeleteFieldValue():
+            if (merge) {
+              // For merge operations (including updates), we include the field in the update mask
+              updateMask.fieldPaths ??= [];
+              updateMask.fieldPaths!.add(key);
+            }
+            // For set operations without merge, we don't need to do anything special
+            // The field will be absent from filteredData, effectively deleting it
+            break;
+          case ServerTimestampFieldValue():
+            updateTransforms.add(firestore.FieldTransform()
+              ..fieldPath = key
+              ..setToServerValue = 'REQUEST_TIME');
+            break;
+          case IncrementFieldValue():
+            updateTransforms.add(firestore.FieldTransform()
+              ..fieldPath = key
+              ..increment = _valueToFirestoreValue(value.value));
+            break;
+          case ArrayUnionFieldValue():
+            updateTransforms.add(firestore.FieldTransform()
+              ..fieldPath = key
+              ..appendMissingElements = firestore.ArrayValue(
+                  values: value.elements.map(_valueToFirestoreValue).toList()));
+            break;
+          case ArrayRemoveFieldValue():
+            updateTransforms.add(firestore.FieldTransform()
+              ..fieldPath = key
+              ..removeAllFromArray = firestore.ArrayValue(
+                  values: value.elements.map(_valueToFirestoreValue).toList()));
+            break;
+        }
+      } else {
+        updateMask.fieldPaths ??= [];
+        updateMask.fieldPaths!.add(key);
+      }
+    });
+
+    final document = _mapToFirestoreDocument(docPath, filteredData);
+    final write = firestore.Write()
+      ..update = document
+      ..updateTransforms = updateTransforms;
+
+    if (merge) {
+      write.updateMask = updateMask;
+    }
+
+    writes.add(write);
+    return writes;
   }
 
   @override
@@ -147,24 +201,27 @@ class FirestoreServerSDK implements FirestoreSDK {
           'The provided path must point to a collection: $collectionPath');
     }
 
-    final document = _mapToFirestoreDocument('', data);
+    final writes = _createWritesForDocument(pathInfo.fullPath, data, false);
 
     try {
-      final createdDocument =
-          await _api.projects.databases.documents.createDocument(
-        document,
-        pathInfo.parentPath,
-        pathInfo.id,
-        // documentId is omitted to let Firestore auto-generate an ID
+      final response = await _api.projects.databases.documents.commit(
+        firestore.CommitRequest()..writes = writes,
+        _databasePath,
       );
 
+      // The last write operation should be the newly added document
+      final newDocPath = response.writeResults?.last.updateTime?.toString() ??
+          (throw Exception('Failed to get the path of the new document'));
+
+      final newDocId = newDocPath.split('/').last;
+      final newDocFullPath = '${pathInfo.fullPath}/$newDocId';
+
       return DocumentReference(
-        id: createdDocument.name!.split('/').last,
-        path: createdDocument.name!.split('${pathInfo.basePath}/')[1],
+        id: newDocId,
+        path: newDocFullPath.split('${pathInfo.basePath}/')[1],
       );
     } catch (e) {
-      log('Error in addDocument: $e');
-      rethrow;
+      throw Exception('Error in addDocument: $e');
     }
   }
 
@@ -466,13 +523,8 @@ class _ServerFirestoreTransaction implements Transaction {
       throw ArgumentError('The provided path must point to a document: $path');
     }
 
-    final write = firestore.Write()
-      ..update = _sdk._mapToFirestoreDocument(pathInfo.documentPath, data);
-    if (merge) {
-      write.updateMask =
-          (firestore.DocumentMask()..fieldPaths = data.keys.toList());
-    }
-    writes.add(write);
+    writes.addAll(
+        _sdk._createWritesForDocument(pathInfo.documentPath, data, merge));
   }
 
   @override
@@ -483,10 +535,8 @@ class _ServerFirestoreTransaction implements Transaction {
       throw ArgumentError('The provided path must point to a document: $path');
     }
 
-    writes.add(firestore.Write()
-      ..update = _sdk._mapToFirestoreDocument(pathInfo.documentPath, data)
-      ..updateMask =
-          (firestore.DocumentMask()..fieldPaths = data.keys.toList()));
+    writes.addAll(
+        _sdk._createWritesForDocument(pathInfo.documentPath, data, true));
   }
 
   @override

@@ -47,12 +47,14 @@ class ClientFirestoreSDK implements FirestoreSDK {
   @override
   Future<void> setDocument(String path, Map<String, dynamic> data,
       {bool merge = false}) async {
-    await _firestore.doc(path).set(data, cf.SetOptions(merge: merge));
+    final convertedData = _convertFieldValues(data);
+    await _firestore.doc(path).set(convertedData, cf.SetOptions(merge: merge));
   }
 
   @override
   Future<void> updateDocument(String path, Map<String, dynamic> data) async {
-    await _firestore.doc(path).update(data);
+    final convertedData = _convertFieldValues(data);
+    await _firestore.doc(path).update(convertedData);
   }
 
   @override
@@ -63,7 +65,9 @@ class ClientFirestoreSDK implements FirestoreSDK {
   @override
   Future<DocumentReference> addDocument(
       String collectionPath, Map<String, dynamic> data) async {
-    final docRef = await _firestore.collection(collectionPath).add(data);
+    final convertedData = _convertFieldValues(data);
+    final docRef =
+        await _firestore.collection(collectionPath).add(convertedData);
     return DocumentReference(id: docRef.id, path: docRef.path);
   }
 
@@ -106,8 +110,7 @@ class ClientFirestoreSDK implements FirestoreSDK {
   Future<T> runTransaction<T>(
       FutureOr<T> Function(Transaction) updateFunction) async {
     return _firestore.runTransaction((cf.Transaction cfTransaction) async {
-      final transaction =
-          _ClientFirestoreTransaction(cfTransaction, _firestore);
+      final transaction = _ClientFirestoreTransaction(cfTransaction, this);
       return await updateFunction(transaction);
     });
   }
@@ -144,6 +147,28 @@ class ClientFirestoreSDK implements FirestoreSDK {
   @override
   String generateId() {
     return _firestore.collection('_').doc().id;
+  }
+
+  Map<String, dynamic> _convertFieldValues(Map<String, dynamic> data) {
+    return data.map((key, value) {
+      if (value is FieldValue) {
+        return MapEntry(key, _convertFieldValue(value));
+      }
+      return MapEntry(key, value);
+    });
+  }
+
+  cf.FieldValue _convertFieldValue(FieldValue value) {
+    return switch (value) {
+      DeleteFieldValue() => cf.FieldValue.delete(),
+      ServerTimestampFieldValue() => cf.FieldValue.serverTimestamp(),
+      IncrementFieldValue(value: var incrementValue) =>
+        cf.FieldValue.increment(incrementValue),
+      ArrayUnionFieldValue(elements: var elements) =>
+        cf.FieldValue.arrayUnion(elements),
+      ArrayRemoveFieldValue(elements: var elements) =>
+        cf.FieldValue.arrayRemove(elements),
+    };
   }
 
   cf.Query _applyQueryConstraints(
@@ -214,17 +239,17 @@ class ClientFirestoreSDK implements FirestoreSDK {
 
 class _ClientFirestoreTransaction implements Transaction {
   final cf.Transaction _transaction;
-  final cf.FirebaseFirestore _firestore;
+  final ClientFirestoreSDK _sdk;
 
-  _ClientFirestoreTransaction(this._transaction, this._firestore);
+  _ClientFirestoreTransaction(this._transaction, this._sdk);
 
   @override
   Future<DocumentSnapshot<Map<String, dynamic>>> getDocument(
       String path) async {
-    final docSnapshot = await _transaction.get(_firestoreDocRef(path));
+    final docSnapshot = await _transaction.get(_sdk._firestore.doc(path));
     return DocumentSnapshot<Map<String, dynamic>>(
       id: docSnapshot.id,
-      data: docSnapshot.data() as Map<String, dynamic>?,
+      data: docSnapshot.data(),
       exists: docSnapshot.exists,
     );
   }
@@ -232,18 +257,19 @@ class _ClientFirestoreTransaction implements Transaction {
   @override
   void setDocument(String path, Map<String, dynamic> data,
       {bool merge = false}) {
-    _transaction.set(_firestoreDocRef(path), data, cf.SetOptions(merge: merge));
+    final convertedData = _sdk._convertFieldValues(data);
+    _transaction.set(
+        _sdk._firestore.doc(path), convertedData, cf.SetOptions(merge: merge));
   }
 
   @override
   void updateDocument(String path, Map<String, dynamic> data) {
-    _transaction.update(_firestoreDocRef(path), data);
+    final convertedData = _sdk._convertFieldValues(data);
+    _transaction.update(_sdk._firestore.doc(path), convertedData);
   }
 
   @override
   void deleteDocument(String path) {
-    _transaction.delete(_firestoreDocRef(path));
+    _transaction.delete(_sdk._firestore.doc(path));
   }
-
-  cf.DocumentReference _firestoreDocRef(String path) => _firestore.doc(path);
 }

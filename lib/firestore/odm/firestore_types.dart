@@ -40,24 +40,38 @@ class DocumentReference {
   DocumentReference({required this.id, required this.path});
 }
 
-class FieldValue {
-  final String _operation;
-  final dynamic _value;
+sealed class FieldValue {
+  const FieldValue();
 
-  FieldValue._(this._operation, this._value);
+  factory FieldValue.delete() = DeleteFieldValue;
+  factory FieldValue.serverTimestamp() = ServerTimestampFieldValue;
+  factory FieldValue.increment(num value) = IncrementFieldValue;
+  factory FieldValue.arrayUnion(List<dynamic> elements) = ArrayUnionFieldValue;
+  factory FieldValue.arrayRemove(List<dynamic> elements) =
+      ArrayRemoveFieldValue;
+}
 
-  static FieldValue delete() => FieldValue._('delete', null);
-  static FieldValue increment(num value) => FieldValue._('increment', value);
-  static FieldValue arrayUnion(List<dynamic> elements) =>
-      FieldValue._('arrayUnion', elements);
-  static FieldValue arrayRemove(List<dynamic> elements) =>
-      FieldValue._('arrayRemove', elements);
+class DeleteFieldValue extends FieldValue {
+  const DeleteFieldValue();
+}
 
-  Map<String, dynamic> toJson() => {
-        '__type': 'FieldValue',
-        'operation': _operation,
-        'value': _value,
-      };
+class ServerTimestampFieldValue extends FieldValue {
+  const ServerTimestampFieldValue();
+}
+
+class IncrementFieldValue extends FieldValue {
+  final num value;
+  const IncrementFieldValue(this.value);
+}
+
+class ArrayUnionFieldValue extends FieldValue {
+  final List<dynamic> elements;
+  const ArrayUnionFieldValue(this.elements);
+}
+
+class ArrayRemoveFieldValue extends FieldValue {
+  final List<dynamic> elements;
+  const ArrayRemoveFieldValue(this.elements);
 }
 
 enum WhereOperator {
