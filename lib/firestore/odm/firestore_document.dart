@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:developer';
 import 'package:json_diff/json_diff.dart';
 
 import 'firestore_converter.dart';
 import 'firestore_sdk_interface.dart';
 import 'firestore_types.dart';
+import 'package:collection/collection.dart';
 
 abstract class FirestoreDocument<T> {
   final FirestoreSDK sdk;
@@ -28,7 +30,9 @@ abstract class FirestoreDocument<T> {
   }
 
   Future<void> update(
-      T Function(DocumentSnapshot<T> currentSnapshot) updateFn) async {
+    T Function(DocumentSnapshot<T> currentSnapshot) updateFn, {
+    bool noTransform = false,
+  }) async {
     final currentSnapshot = await get();
     if (!currentSnapshot.exists) {
       throw Exception('Document does not exist');
@@ -40,10 +44,14 @@ abstract class FirestoreDocument<T> {
         : <String, dynamic>{};
     final updatedMap = converter.toJson(updatedData);
 
-    final diff = _diff(currentMap, updatedMap);
+    log('Updating currentMap: $currentMap');
+    log('Updating updatedMap: $updatedMap');
+    final updates =
+        generateUpdates(currentMap, updatedMap, noTransform: noTransform);
 
-    if (diff.isNotEmpty) {
-      await sdk.updateDocument(path, diff);
+    if (updates.isNotEmpty) {
+      log('Updating document $path with updates: $updates');
+      await sdk.updateDocument(path, updates);
     }
   }
 
@@ -63,35 +71,41 @@ abstract class FirestoreDocument<T> {
         );
   }
 
-  static Map<String, dynamic> _diff(
-      Map<String, dynamic> oldData, Map<String, dynamic> newData) {
+  static Map<String, dynamic> generateUpdates(
+    Map<String, dynamic> oldData,
+    Map<String, dynamic> newData, {
+    bool noTransform = false,
+  }) {
     final differ = JsonDiffer.fromJson(oldData, newData);
-    final result = <String, dynamic>{};
+    final updates = <String, dynamic>{};
 
     void processNode(DiffNode node) {
-      String getFullPath(Object key) => [...node.path, key].join('.');
+      String buildFieldPath(Object key) =>
+          [...node.path, key.toString()].join('.');
 
-      // Process added fields
+      // Handle added fields
       node.added.forEach((key, value) {
-        result[getFullPath(key)] = newData[key];
+        updates[buildFieldPath(key)] = value;
       });
 
-      // Process removed fields
+      // Handle removed fields
       node.removed.forEach((key, _) {
-        result[getFullPath(key)] = FieldValue.delete();
+        updates[buildFieldPath(key)] = FieldValue.delete();
       });
 
-      // Process changed fields
+      // Handle changed fields
       node.changed.forEach((key, value) {
         final [oldValue, newValue] = value;
-        final fullPath = getFullPath(key);
+        final fieldPath = buildFieldPath(key);
 
-        if (oldValue is List && newValue is List) {
-          _handleListChanges(result, fullPath, oldValue, newValue);
+        if (noTransform) {
+          updates[fieldPath] = newValue;
+        } else if (oldValue is List && newValue is List) {
+          _handleListChanges(updates, fieldPath, oldValue, newValue);
         } else if (oldValue is num && newValue is num) {
-          result[fullPath] = FieldValue.increment(newValue - oldValue);
+          updates[fieldPath] = FieldValue.increment(newValue - oldValue);
         } else {
-          result[fullPath] = newValue;
+          updates[fieldPath] = newValue;
         }
       });
 
@@ -102,9 +116,23 @@ abstract class FirestoreDocument<T> {
     }
 
     processNode(differ.diff());
-    return result;
+    return updates;
   }
 
-  static void _handleListChanges(
-      Map<String, dynamic> result, String key, List oldValue, List newValue) {}
+  static void _handleListChanges(Map<String, dynamic> updates, String fieldPath,
+      List oldValue, List newValue) {
+    const deepEq = DeepCollectionEquality();
+    if (newValue.length > oldValue.length &&
+        deepEq.equals(newValue.sublist(0, oldValue.length), oldValue)) {
+      updates[fieldPath] =
+          FieldValue.arrayUnion(newValue.sublist(oldValue.length));
+    } else if (oldValue.length > newValue.length &&
+        newValue.every((element) => oldValue.contains(element))) {
+      final removedElements =
+          oldValue.where((element) => !newValue.contains(element)).toList();
+      updates[fieldPath] = FieldValue.arrayRemove(removedElements);
+    } else if (!deepEq.equals(oldValue, newValue)) {
+      updates[fieldPath] = newValue;
+    }
+  }
 }

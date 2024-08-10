@@ -415,15 +415,19 @@ class FirestoreServerSDK implements FirestoreSDK {
   dynamic _convertFromFirestoreValue(firestore.Value value) {
     if (value.nullValue != null) return null;
     if (value.booleanValue != null) return value.booleanValue;
-    if (value.integerValue != null) return int.parse(value.integerValue!);
+    if (value.integerValue != null) return int.parse(value.integerValue ?? '0');
     if (value.doubleValue != null) return value.doubleValue;
     if (value.stringValue != null) return value.stringValue;
     if (value.arrayValue != null) {
-      return value.arrayValue!.values!.map(_convertFromFirestoreValue).toList();
+      return value.arrayValue?.values
+              ?.map(_convertFromFirestoreValue)
+              .toList() ??
+          [];
     }
     if (value.mapValue != null) {
-      return value.mapValue!.fields!.map(
-          (key, value) => MapEntry(key, _convertFromFirestoreValue(value)));
+      return value.mapValue?.fields?.map((key, value) =>
+              MapEntry(key, _convertFromFirestoreValue(value))) ??
+          {};
     }
     throw ArgumentError('Unsupported Firestore value type');
   }
