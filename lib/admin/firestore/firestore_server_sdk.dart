@@ -201,27 +201,24 @@ class FirestoreServerSDK implements FirestoreSDK {
           'The provided path must point to a collection: $collectionPath');
     }
 
-    final writes = _createWritesForDocument(pathInfo.fullPath, data, false);
+    final document = _mapToFirestoreDocument('', data);
 
     try {
-      final response = await _api.projects.databases.documents.commit(
-        firestore.CommitRequest()..writes = writes,
-        _databasePath,
+      final createdDocument =
+          await _api.projects.databases.documents.createDocument(
+        document,
+        pathInfo.parentPath,
+        pathInfo.id,
+        // documentId is omitted to let Firestore auto-generate an ID
       );
-
-      // The last write operation should be the newly added document
-      final newDocPath = response.writeResults?.last.updateTime?.toString() ??
-          (throw Exception('Failed to get the path of the new document'));
-
-      final newDocId = newDocPath.split('/').last;
-      final newDocFullPath = '${pathInfo.fullPath}/$newDocId';
 
       return DocumentReference(
-        id: newDocId,
-        path: newDocFullPath.split('${pathInfo.basePath}/')[1],
+        id: createdDocument.name!.split('/').last,
+        path: createdDocument.name!.split('${pathInfo.basePath}/')[1],
       );
     } catch (e) {
-      throw Exception('Error in addDocument: $e');
+      log('Error in addDocument: $e');
+      rethrow;
     }
   }
 

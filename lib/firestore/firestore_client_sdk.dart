@@ -65,9 +65,7 @@ class ClientFirestoreSDK implements FirestoreSDK {
   @override
   Future<DocumentReference> addDocument(
       String collectionPath, Map<String, dynamic> data) async {
-    final convertedData = _convertFieldValues(data);
-    final docRef =
-        await _firestore.collection(collectionPath).add(convertedData);
+    final docRef = await _firestore.collection(collectionPath).add(data);
     return DocumentReference(id: docRef.id, path: docRef.path);
   }
 
