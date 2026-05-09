@@ -8,7 +8,7 @@ environment:
 
 # Add regular dependencies here.
 dependencies:
-  analyzer: ^6.4.1
+  analyzer: ^13.0.0
   dart_casing: ^3.0.1
   dart_jsonwebtoken: ^2.14.0
   googleapis: ^13.2.0
