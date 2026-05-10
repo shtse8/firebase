@@ -10,7 +10,7 @@ environment:
 dependencies:
   analyzer: ^6.4.1
   dart_casing: ^3.0.1
-  dart_jsonwebtoken: ^2.14.0
+  dart_jsonwebtoken: ^3.0.0
   googleapis: ^13.2.0
   http: ^1.2.2
   build: ^2.4.1
